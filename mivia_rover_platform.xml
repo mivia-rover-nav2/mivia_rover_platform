@@ -1,0 +1,9 @@
+<library path="mivia_rover_platform">
+  <class name="mivia_rover_platform/MiviaRoverSystem"
+         type="mivia_rover_platform::MiviaRoverSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control SystemInterface plugin for Mivia Rover, a 4 wheel independently driven mobile robot. Provides velocity command interfaces and position and velocity state interfaces for all wheel joints, enabling integration with diff_drive_controller.
+    </description>
+  </class>
+</library>

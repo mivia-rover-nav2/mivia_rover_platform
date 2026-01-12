@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<!-- Mivia Rover: 4-wheel skid-steer mobile base -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mivia_rover">
+
+  <!-- Arguments -->
+  <xacro:arg name="prefix" default=""/>
+  <xacro:arg name="use_mock_hardware" default="false"/>
+
+  <!-- ===================================================== -->
+  <!-- 1) Mechanical / kinematic description                 -->
+  <!--    (provided by mivia_rover_description package)      -->
+  <!-- ===================================================== -->
+  <xacro:include
+    filename="$(find mivia_rover_description)/urdf/mivia_rover_description.urdf.xacro"/>
+
+  <!-- ===================================================== -->
+  <!-- 2) ros2_control description                           -->
+  <!--    (provided by mivia_rover_platform package)          -->
+  <!-- ===================================================== -->
+  <xacro:include
+    filename="$(find mivia_rover_platform)/description/ros2_control/mivia_rover.ros2_control.xacro"/>
+
+  <!-- ===================================================== -->
+  <!-- 3) Instantiate robot model                            -->
+  <!-- ===================================================== -->
+  <xacro:mivia_rover prefix="$(arg prefix)"/>
+
+  <!-- ===================================================== -->
+  <!-- 4) Instantiate ros2_control system                    -->
+  <!-- ===================================================== -->
+  <xacro:mivia_rover_ros2_control
+    name="MiviaRover"
+    prefix="$(arg prefix)"
+    use_mock_hardware="$(arg use_mock_hardware)"/>
+
+</robot>
