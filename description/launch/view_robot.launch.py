@@ -1,44 +1,27 @@
-# Copyright 2026
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # Declare arguments
     declared_arguments = []
     declared_arguments.append(
         DeclareLaunchArgument(
             "description_package",
-            default_value="mivia_rover_description",
-            description=(
-                "Description package containing robot URDF/xacro files and RViz config. "
-                "Usually not set unless a custom description package is used."
-            ),
+            default_value="mivia_rover_platform",
+            description="Package containing the top-level URDF/xacro (instantiates the robot).",
         )
     )
     declared_arguments.append(
         DeclareLaunchArgument(
             "description_file",
-            default_value="mivia_rover_description.urdf.xacro",
-            description="URDF/XACRO description file with the robot.",
+            default_value="mivia_rover.urdf.xacro",
+            description="Top-level URDF/XACRO file describing the robot.",
         )
     )
     declared_arguments.append(
@@ -52,28 +35,23 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "prefix",
             default_value="",
-            description=(
-                "Prefix of the joint/link names, useful for multi-robot setup. "
-                "If changed, joint names in the controllers' configuration must be updated accordingly."
-            ),
+            description="Prefix of the joint/link names (multi-robot).",
         )
     )
     declared_arguments.append(
         DeclareLaunchArgument(
             "use_mock_hardware",
-            default_value="false",
-            description="If true, load mock hardware plugin in ros2_control blocks (if present in the xacro).",
+            default_value="true",
+            description="If true, select mock hardware in ros2_control blocks (if present in the xacro).",
         )
     )
 
-    # Initialize Arguments
     description_package = LaunchConfiguration("description_package")
     description_file = LaunchConfiguration("description_file")
     gui = LaunchConfiguration("gui")
     prefix = LaunchConfiguration("prefix")
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
 
-    # Get URDF via xacro (from description package)
     robot_description_content = Command(
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
@@ -81,6 +59,7 @@ def generate_launch_description():
             PathJoinSubstitution(
                 [
                     FindPackageShare(description_package),
+                    "description",
                     "urdf",
                     description_file,
                 ]
@@ -93,12 +72,15 @@ def generate_launch_description():
             use_mock_hardware,
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
 
-    # RViz config (in description package)
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str)
+    }
+
+    # RViz config in mivia_rover_description (as per your setup)
     rviz_config_file = PathJoinSubstitution(
         [
-            FindPackageShare(description_package),
+            FindPackageShare("mivia_rover_description"),
             "rviz",
             "mivia_rover.rviz",
         ]
@@ -126,10 +108,8 @@ def generate_launch_description():
         condition=IfCondition(gui),
     )
 
-    nodes = [
+    return LaunchDescription(declared_arguments + [
         joint_state_publisher_node,
         robot_state_publisher_node,
         rviz_node,
-    ]
-
-    return LaunchDescription(declared_arguments + nodes)
+    ])
