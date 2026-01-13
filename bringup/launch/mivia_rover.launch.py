@@ -89,11 +89,10 @@ def generate_launch_description():
         ]
     )
 
-    # Optional RViz config (provide one if you have it; otherwise RViz starts with default)
+    # RViz config is in mivia_rover_description package
     rviz_config_file = PathJoinSubstitution(
         [
-            FindPackageShare("mivia_rover_platform"),
-            "description",
+            FindPackageShare("mivia_rover_description"),
             "rviz",
             "mivia_rover.rviz",
         ]
