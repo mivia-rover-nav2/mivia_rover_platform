@@ -83,7 +83,6 @@ def generate_launch_description():
     robot_controllers = PathJoinSubstitution(
         [
             FindPackageShare("mivia_rover_platform"),
-            "bringup",
             "config",
             "mivia_rover_controllers.yaml",
         ]

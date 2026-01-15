@@ -57,8 +57,13 @@ install(
 )
 
 install(
-  DIRECTORY bringup/
-  DESTINATION share/${PROJECT_NAME}/bringup
+  DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
+install(
+  DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 # Plugin XML
