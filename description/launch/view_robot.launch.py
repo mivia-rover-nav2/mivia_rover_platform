@@ -78,13 +78,13 @@ def generate_launch_description():
     }
 
     # RViz config in mivia_rover_description (as per your setup)
-    rviz_config_file = PathJoinSubstitution(
-        [
-            FindPackageShare("mivia_rover_description"),
-            "rviz",
-            "mivia_rover.rviz",
-        ]
-    )
+    #rviz_config_file = PathJoinSubstitution(
+    #    [
+    #        FindPackageShare("mivia_rover_description"),
+    #        "rviz",
+    #        "mivia_rover.rviz",
+    #    ]
+    #)
 
     joint_state_publisher_node = Node(
         package="joint_state_publisher_gui",
@@ -99,17 +99,17 @@ def generate_launch_description():
         parameters=[robot_description],
     )
 
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="log",
-        arguments=["-d", rviz_config_file],
-        condition=IfCondition(gui),
-    )
+    #rviz_node = Node(
+    #    package="rviz2",
+    #    executable="rviz2",
+    #    name="rviz2",
+    #    output="log",
+    #    arguments=["-d", rviz_config_file],
+    #    condition=IfCondition(gui),
+    #)
 
     return LaunchDescription(declared_arguments + [
         joint_state_publisher_node,
         robot_state_publisher_node,
-        rviz_node,
+        #rviz_node,
     ])
