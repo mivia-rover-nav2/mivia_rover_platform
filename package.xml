@@ -24,6 +24,10 @@
   <depend>rclcpp_lifecycle</depend>
 
   <!-- Runtime bringup dependencies -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>navigation2</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
 
