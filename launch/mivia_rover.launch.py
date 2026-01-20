@@ -104,7 +104,7 @@ def generate_launch_description():
         output="both",
         remappings=[
             ("~/robot_description", "/robot_description"),
-            ("/mivia_rover_base_controller/cmd_vel", "/cmd_vel"),
+            ("/mivia_rover_base_controller/cmd_vel", "/cmd_vel_stamped"),
         ],
     )
 
