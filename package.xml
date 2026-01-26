@@ -18,6 +18,9 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
 
+  <!-- Runtime: can_msgs -->
+  <exec_depend>mivia_rover_can_msgs</exec_depend>
+
   <!-- Runtime: controller manager / controllers -->
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>ros2_controllers</exec_depend>

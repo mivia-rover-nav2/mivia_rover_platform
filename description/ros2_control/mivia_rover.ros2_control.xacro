@@ -1,13 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!--
-    ros2_control integration for Mivia Rover
-    - 4 independently driven wheel joints
-    - velocity command interface
-    - position/velocity state interfaces
-  -->
-
   <xacro:macro name="mivia_rover_ros2_control" params="name prefix use_mock_hardware">
 
     <ros2_control name="${name}" type="system">
@@ -16,10 +9,26 @@
       <xacro:unless value="${use_mock_hardware}">
         <hardware>
           <plugin>mivia_rover_platform/MiviaRoverSystem</plugin>
-          <!-- Optional parameters for your SystemInterface (add only if used in code)
-          <param name="example_param_hw_start_duration_sec">0</param>
-          <param name="example_param_hw_stop_duration_sec">0</param>
-          -->
+          <!-- Note: parameters are declared here because they can't be passed from a yaml file when you are implementing a custom hardware plugin -->
+          <!-- ROS topics used-->
+          <param name="encoder_topic">/encoder_rpms</param>
+          <param name="reference_topic">/reference_rpms</param>
+
+          <!-- Safety / robustness -->
+          <param name="feedback_timeout_ms">150</param>
+          <param name="max_consecutive_timeouts">10</param>
+
+          <!-- Command publish policy -->
+          <param name="publish_rate_hz">50</param>
+          <param name="rpm_limit_abs">180</param>
+
+          <!-- Explicit mapping: msg fields -> joint names -->
+          <!-- Convention in code: [front_left, rear_left, front_right, rear_right] -->
+          <param name="joint_front_left">${prefix}wheel_fl_joint</param>
+          <param name="joint_rear_left">${prefix}wheel_rl_joint</param>
+          <param name="joint_front_right">${prefix}wheel_fr_joint</param>
+          <param name="joint_rear_right">${prefix}wheel_rr_joint</param>
+
         </hardware>
       </xacro:unless>
 
