@@ -5,51 +5,38 @@
   <version>0.0.0</version>
   <description>ROS 2 package providing ros2_control integration for the Mivia Rover platform (4 independently driven wheels).</description>
 
-  <!-- Maintainers -->
   <maintainer email="aguarini@unisa.it">Alessio Guarini</maintainer>
-
+  <author email="aguarini@unisa.it">Alessio Guarini</author>
   <license>Apache-2.0</license>
 
-  <!-- Authors (optional but recommended) -->
-  <author email="aguarini@unisa.it">Alessio Guarini</author>
-
-  <!-- Build tool -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Build-time + runtime dependencies for the hardware plugin -->
+  <!-- Core: hardware plugin deps (build + run) -->
   <depend>backward_ros</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
 
-  <!-- Runtime bringup dependencies -->
-  <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>navigation2</exec_depend>
-  <exec_depend>ros2_controllers</exec_depend>
-
+  <!-- Runtime: controller manager / controllers -->
   <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
-
-  <!-- Controller used in the first bringup (velocity commands for multiple wheel joints) -->
   <exec_depend>forward_command_controller</exec_depend>
 
-  <!-- Robot model / visualization -->
-  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <!-- Runtime: robot description / visualization (keep if this package truly provides them) -->
   <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>ros2controlcli</exec_depend>
-  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>xacro</exec_depend>
 
-  <!-- Tests (optional but aligned with demo structure) -->
-  <test_depend>ament_cmake_pytest</test_depend>
-  <test_depend>ament_cmake_ros</test_depend>
-  <test_depend>launch_testing_ament_cmake</test_depend>
-  <test_depend>launch_testing</test_depend>
-  <test_depend>launch</test_depend>
-  <test_depend>liburdfdom-tools</test_depend>
-  <test_depend>xacro</test_depend>
+  <!-- Optional: navigation stack (keep only if your platform package really owns Nav2 launch/params) -->
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>navigation2</exec_depend>
+
+  <!-- Tests (recommended if you add plugin load test) -->
+  <test_depend>ament_cmake_gmock</test_depend>
+  <test_depend>hardware_interface</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

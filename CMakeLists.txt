@@ -14,30 +14,29 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   rclcpp_lifecycle
 )
 
-find_package(backward_ros REQUIRED)
 find_package(ament_cmake REQUIRED)
+find_package(backward_ros REQUIRED)
+
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
 
-add_library(
-  ${PROJECT_NAME}
-  SHARED
-  hardware/mivia_rover_system.cpp
+add_library(${PROJECT_NAME} SHARED
+  src/mivia_rover_system.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
-  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/hardware/include>
-  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
+  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
-ament_target_dependencies(
-  ${PROJECT_NAME} PUBLIC
+ament_target_dependencies(${PROJECT_NAME} PUBLIC
   ${THIS_PACKAGE_INCLUDE_DEPENDS}
 )
 
+# Export plugin description to pluginlib/resource_manager
 pluginlib_export_plugin_description_file(hardware_interface mivia_rover_platform.xml)
 
 # ----------------------------
@@ -46,11 +45,11 @@ pluginlib_export_plugin_description_file(hardware_interface mivia_rover_platform
 
 # Headers
 install(
-  DIRECTORY hardware/include/
-  DESTINATION include/${PROJECT_NAME}
+  DIRECTORY include/
+  DESTINATION include
 )
 
-# Resources: keep directory structure (do NOT flatten)
+# Resources
 install(
   DIRECTORY description/
   DESTINATION share/${PROJECT_NAME}/description
@@ -80,10 +79,18 @@ install(TARGETS ${PROJECT_NAME}
   RUNTIME DESTINATION bin
 )
 
+# ----------------------------
+# TESTING (opzionale ma raccomandato)
+# ----------------------------
 if(BUILD_TESTING)
-  find_package(ament_cmake_pytest REQUIRED)
+  find_package(ament_cmake_gmock REQUIRED)
+  find_package(hardware_interface REQUIRED)
+
+  # TODO: aggiungere test appena disponibile.
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
+ament_export_include_directories(include)
+
 ament_package()
