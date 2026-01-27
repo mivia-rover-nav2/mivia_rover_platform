@@ -18,7 +18,7 @@
 namespace mivia_rover_platform
 {
 
-static constexpr double kTwoPi = 6.2831853071795864769;
+static constexpr double kTwoPi = 6.2831853071795864769252867665590057683943387987502116419498891846;
 static constexpr double kNsToSec = 1.0e-9;
 
 static bool find_interface_name(
