@@ -11,8 +11,8 @@
           <plugin>mivia_rover_platform/MiviaRoverSystem</plugin>
           <!-- Note: parameters are declared here because they can't be passed from a yaml file when you are implementing a custom hardware plugin -->
           <!-- ROS topics used-->
-          <param name="encoder_topic">/encoder_rpms</param>
-          <param name="reference_topic">/reference_rpms</param>
+          <param name="encoder_topic">/mivia_rover/encoder_rpms</param>
+          <param name="reference_topic">/mivia_rover/reference</param>
 
           <!-- Safety / robustness -->
           <param name="feedback_timeout_ms">150</param>

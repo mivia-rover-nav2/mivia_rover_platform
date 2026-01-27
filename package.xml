@@ -3,7 +3,10 @@
 <package format="3">
   <name>mivia_rover_platform</name>
   <version>0.0.0</version>
-  <description>ROS 2 package providing ros2_control integration for the Mivia Rover platform (4 independently driven wheels).</description>
+  <description>
+    ROS 2 package providing ros2_control hardware integration for the Mivia Rover platform
+    (4 independently driven wheels).
+  </description>
 
   <maintainer email="aguarini@unisa.it">Alessio Guarini</maintainer>
   <author email="aguarini@unisa.it">Alessio Guarini</author>
@@ -11,17 +14,18 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <!-- Core: hardware plugin deps (build + run) -->
+  <!-- Core (build + run): hardware plugin deps -->
   <depend>backward_ros</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
 
-  <!-- Runtime: can_msgs -->
-  <exec_depend>mivia_rover_can_msgs</exec_depend>
+  <!-- Core (build + run): RT buffer + custom messages used in the plugin implementation -->
+  <depend>realtime_tools</depend>
+  <depend>mivia_rover_can_msgs</depend>
 
-  <!-- Runtime: controller manager / controllers -->
+  <!-- Runtime: controller manager / controllers (keep if launched from this package) -->
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>ros2_controllers</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
@@ -32,14 +36,17 @@
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>xacro</exec_depend>
+  <exec_depend>mivia_rover_description</exec_depend>
 
-  <!-- Optional: navigation stack (keep only if your platform package really owns Nav2 launch/params) -->
+  <!-- Optional: navigation stack (keep only if this package owns Nav2 launch/params) -->
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>navigation2</exec_depend>
 
-  <!-- Tests (recommended if you add plugin load test) -->
+  <!-- Tests -->
   <test_depend>ament_cmake_gmock</test_depend>
   <test_depend>hardware_interface</test_depend>
+  <test_depend>pluginlib</test_depend>
+  <test_depend>rclcpp</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
