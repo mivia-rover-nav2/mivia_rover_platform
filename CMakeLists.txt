@@ -12,6 +12,8 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  realtime_tools
+  mivia_rover_can_msgs
 )
 
 find_package(ament_cmake REQUIRED)
@@ -85,8 +87,10 @@ install(TARGETS ${PROJECT_NAME}
 if(BUILD_TESTING)
   find_package(ament_cmake_gmock REQUIRED)
   find_package(hardware_interface REQUIRED)
+  find_package(pluginlib REQUIRED)
+  find_package(rclcpp REQUIRED)
 
-  # TODO: aggiungere test appena disponibile.
+  # TODO: aggiungere test (es. test_load_mivia_rover_system.cpp) con ament_add_gmock
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
