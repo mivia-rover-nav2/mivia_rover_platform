@@ -10,12 +10,11 @@ controller_manager:
 
 mivia_rover_base_controller:
   ros__parameters:
-    # Two wheels per side (front + rear)
+    # Two wheels per side (front + rear) - must match URDF/Xacro
     left_wheel_names: ["wheel_fl_joint", "wheel_rl_joint"]
     right_wheel_names: ["wheel_fr_joint", "wheel_rr_joint"]
 
     # Geometry (must match URDF/Xacro)
-    # track = 0.355 in your model -> separation between left and right wheel contact lines
     wheel_separation: 0.355
     wheel_radius: 0.085
     wheels_per_side: 2
@@ -29,7 +28,7 @@ mivia_rover_base_controller:
     base_frame_id: base_footprint
 
     # With fake/mock hardware or when not integrating wheel encoders yet
-    open_loop: true
+    open_loop: false
     enable_odom_tf: true
 
     cmd_vel_timeout: 0.5

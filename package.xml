@@ -36,6 +36,7 @@
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>xacro</exec_depend>
+  <exec_depend>mivia_rover_description</exec_depend>
 
   <!-- Optional: navigation stack (keep only if this package owns Nav2 launch/params) -->
   <exec_depend>nav2_bringup</exec_depend>
