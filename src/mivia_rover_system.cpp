@@ -15,6 +15,10 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
+extern "C" {
+  #include "rover.h"
+}
+
 namespace mivia_rover_platform
 {
 

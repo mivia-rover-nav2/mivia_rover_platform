@@ -25,6 +25,7 @@ endforeach()
 
 add_library(${PROJECT_NAME} SHARED
   src/mivia_rover_system.cpp
+  src/rover.c
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
