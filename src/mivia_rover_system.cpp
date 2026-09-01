@@ -396,6 +396,13 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
   consecutive_timeouts_ = 0U;
   fault_stop_.store(false);
 
+  /* Activation of Log Thread */
+  log_head_.store(0);
+  log_tail_.store(0);
+  logging_is_running_.store(true);
+  logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
+
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -404,6 +411,12 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
 {
   /* Optionally request stop */
   fault_stop_.store(true);
+
+  /* Logging Thread */
+  logging_is_running_.store(false);
+  log_cv_.notify_all();
+  if (logging_thread_.joinable()) logging_thread_.join();
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -528,6 +541,9 @@ hardware_interface::return_type MiviaRoverSystem::write(
   cmd.valid = true;
   cmd.stamp_ns = static_cast<std::uint64_t>(time.nanoseconds());
 
+  auto now_steady_clock = std::chrono::steady_clock::now();
+  cmd.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+
   for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
   {
     const std::size_t joint_i = wheel_joint_indices_[k];
@@ -602,7 +618,6 @@ void MiviaRoverSystem::comm_thread_entry_()
         out.front_right = 0;
         out.rear_right = 0;
 
-        reference_pub_->publish(out);
       }
       else
       {
@@ -619,7 +634,10 @@ void MiviaRoverSystem::comm_thread_entry_()
           out.front_right = cmd.rpm[2];
           out.rear_right = cmd.rpm[3];
 
-          reference_pub_->publish(out);
+          //Data rewriting for loggign purposes, in the final version will it will be reverted to the original value
+          out.header.stamp.sec = cmd.t_start_dds_ns /1000000000LL;
+          out.header.stamp.nanosec = cmd.t_start_dds_ns %1000000000LL;
+
         }
         else
         {
@@ -629,9 +647,15 @@ void MiviaRoverSystem::comm_thread_entry_()
           out.front_right = 0;
           out.rear_right = 0;
 
-          reference_pub_->publish(out);
+          //Data rewriting for loggign purposes, in the final version will it will be reverted to the original value
+          out.header.stamp.sec = cmd.t_start_dds_ns /1000000000LL;
+          out.header.stamp.nanosec = cmd.t_start_dds_ns %1000000000LL;
+
         }
       }
+
+      reference_pub_->publish(out);
+
     }
 
     std::this_thread::sleep_for(sleep_dur);

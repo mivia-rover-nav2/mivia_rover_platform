@@ -41,6 +41,15 @@
 #include "mivia_rover_can_msgs/msg/encoder_rpms.hpp"
 #include "mivia_rover_can_msgs/msg/reference.hpp"
 
+#include <conditin_variable>
+#include <mutex>
+#include <fstream>
+#include <chrono>
+
+extern "C" {
+  #include "rover.h"
+}
+
 namespace mivia_rover_platform
 {
 
@@ -87,6 +96,8 @@ private:
   {
     std::array<double, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
+    //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion
+    std::uint64_t t_start_dds_ns;
     bool valid;
   };
 
@@ -96,6 +107,12 @@ private:
     std::uint64_t stamp_ns;
     bool valid;
   };
+
+  struct LogEntry {
+    uint64_t seq;
+    uint64_t t_generated_ns;
+    uint64_t t_published_ns;
+  }
 
   void encoder_callback_(const mivia_rover_can_msgs::msg::EncoderRpms::SharedPtr msg);
 
@@ -160,6 +177,24 @@ private:
   /* ---------- Fault handling ---------- */
   std::uint32_t consecutive_timeouts_;
   std::atomic<bool> fault_stop_;
+
+  //Added for logging of times
+
+  /* ---------- SocketCAN ---------- */
+  int can_socket_fd_ = -1;
+
+  /* ---------- Time Logging ---------- */
+  static constexpr std::size_t kLogBufferSize = 4096U;
+  std::array<std::LogEntry, kLogBufferSize> log_buffer_;
+  std::atomic<std::sized_t> log_head_{0};
+  std::atomic<std::sized_t> log_tail_{0};
+
+  /* ---------- Logging Thread with sync without busywaiut---------- */
+  std::thread logging_thread_;
+  std::atomic<bool> logging_is_running_{false};
+  std::mutex log_mutex_;
+  std::conditin_variable log_cv_;
+  void logging_thread_entry_();
 };
 
 }  // namespace mivia_rover_platform
