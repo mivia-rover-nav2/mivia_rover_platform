@@ -28,7 +28,8 @@ mivia_rover_base_controller:
     base_frame_id: base_footprint
 
     # With fake/mock hardware or when not integrating wheel encoders yet
-    open_loop: false
+    # Modified for simulate. Just for testing
+    open_loop: true
     enable_odom_tf: true
 
     cmd_vel_timeout: 0.5

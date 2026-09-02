@@ -397,10 +397,10 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
   fault_stop_.store(false);
 
   /* Activation of Log Thread */
-  log_head_.store(0);
-  log_tail_.store(0);
-  logging_is_running_.store(true);
-  logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
+  // log_head_.store(0);
+  // log_tail_.store(0);
+  // logging_is_running_.store(true);
+  // logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
 
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -413,9 +413,9 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
   fault_stop_.store(true);
 
   /* Logging Thread */
-  logging_is_running_.store(false);
-  log_cv_.notify_all();
-  if (logging_thread_.joinable()) logging_thread_.join();
+  // logging_is_running_.store(false);
+  // log_cv_.notify_all();
+  // if (logging_thread_.joinable()) logging_thread_.join();
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -641,6 +641,12 @@ void MiviaRoverSystem::comm_thread_entry_()
         }
         else
         {
+          //Added in this case only for measure the times, it will be delated
+          const std::uint32_t seq = cmd_seq_.load(std::memory_order_acquire);
+          const std::size_t idx = static_cast<std::size_t>(seq & 1U);
+
+          const CommandSample cmd = cmd_buf_[idx];
+
           /* No command yet: publish zeros (safe default) */
           out.front_left = 0;
           out.rear_left = 0;
