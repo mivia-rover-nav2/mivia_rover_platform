@@ -15,8 +15,17 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
+//Includes for socket CAN
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+#include <unistd.h>
+
+
 extern "C" {
-  #include "rover.h"
+  #include "rover.c"
 }
 
 namespace mivia_rover_platform
@@ -396,12 +405,22 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
   consecutive_timeouts_ = 0U;
   fault_stop_.store(false);
 
-  /* Activation of Log Thread */
-  // log_head_.store(0);
-  // log_tail_.store(0);
-  // logging_is_running_.store(true);
-  // logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
+  can_socket_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
+  if (can_socket_fd_ >= 0) {
+    ifreq ifr;
+    std::strcpy(ifr.ifr_name, "can1");
+    ioctl(can_socket_fd_, SIOCGIFINDEX, &ifr);
+    sockaddr_can addr;
+    addr.can_family = AF_CAN;
+    addr.can_ifindex = ifr.ifr_ifindex;
+    ::bind(can_socket_fd_, (struct sockaddr *)&addr, sizeof(addr));
+  }
 
+  /* Activation of Log Thread */
+  log_head_.store(0);
+  log_tail_.store(0);
+  logging_is_running_.store(true);
+  logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -413,9 +432,15 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
   fault_stop_.store(true);
 
   /* Logging Thread */
-  // logging_is_running_.store(false);
-  // log_cv_.notify_all();
-  // if (logging_thread_.joinable()) logging_thread_.join();
+  logging_is_running_.store(false);
+  log_cv_.notify_all();
+  if (logging_thread_.joinable()) logging_thread_.join();
+
+  /* ScoketCAN */
+  if(can_socket_fd_ >= 0) {
+    close(can_socket_fd_);
+    can_socket_fd_ = -1;
+  }
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -542,13 +567,45 @@ hardware_interface::return_type MiviaRoverSystem::write(
   cmd.stamp_ns = static_cast<std::uint64_t>(time.nanoseconds());
 
   auto now_steady_clock = std::chrono::steady_clock::now();
-  cmd.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+  uint64_t t_start_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
 
   for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
   {
     const std::size_t joint_i = wheel_joint_indices_[k];
     const double rpm = rad_s_to_rpm_(hw_commands_[joint_i]);
     cmd.rpm[k] = clamp_rpm_(rpm, rpm_limit_abs_);
+  }
+
+  if ((can_socket_fd_ >= 0) && !fault_stop_.load(std::memory_order_relaxed)) {
+    can_frame frame;
+    frame.can_id = ROVER_REFERENCE_FRAME_ID;
+    frame.can_dlc = ROVER_REFERENCE_LENGTH;
+
+    rover_reference_t ref_msg;
+    rover_reference_init(&ref_msg);
+    ref_msg.front_left = rover_reference_front_left_encode(cmd.rpm[0]);
+    ref_msg.rear_left = rover_reference_rear_left_encode(cmd.rpm[1]);
+    ref_msg.front_right = rover_reference_front_right_encode(cmd.rpm[2]);
+    ref_msg.rear_right = rover_reference_rear_right_encode(cmd.rpm[3]);
+
+    uint8_t payload[8];
+    rover_reference_pack(payload, &ref_msg, sizeof(payload));
+    std::memcpy(frame.data, payload, 8);
+
+
+    //CAN Transmission
+    ::write(can_socket_fd_, &frame, sizeof(struct can_frame));
+    now_steady_clock = std::chrono::steady_clock::now();
+    uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+
+    size_t head = log_head_.load(std::memory_order_relaxed);
+    size_t next_head = (head + 1) % 4096;
+    if (next_head != log_tail_.load(std::memory_order_acquire)) {
+      log_buffer_[head].t_start_ns = t_start_ns;
+      log_buffer_[head].t_end_ns = t_end_ns;
+      log_head_.store(next_head, std::memory_order_release);
+      log_cv_.notify_one();
+    }
   }
 
   /* Lock-free double-buffer publish: sequence counter selects active buffer */
@@ -560,6 +617,8 @@ hardware_interface::return_type MiviaRoverSystem::write(
     cmd_valid_.store(true, std::memory_order_release);
 
     cmd_seq_.store(seq + 1U, std::memory_order_release);
+
+    dds_has_new_data_.store(true, std::memory_order_release);
   }
 
   return hardware_interface::return_type::OK;
@@ -592,7 +651,9 @@ void MiviaRoverSystem::comm_thread_entry_()
     /* no-op */
   }
 
-  const std::chrono::duration<double> sleep_dur(1.0 / hz);
+  rclcpp::Rate rate(hz);
+
+  //const std::chrono::duration<double> sleep_dur(1.0 / hz);
 
   while (comm_running_.load())
   {
@@ -603,6 +664,11 @@ void MiviaRoverSystem::comm_thread_entry_()
     else
     {
       /* no-op */
+    }
+
+    if(!dds_has_new_data_.exchange(false, std::memory_order_acquire)) {
+      rate.sleep();
+      continue;
     }
 
     if ((reference_pub_ != nullptr) && (comm_node_ != nullptr))
@@ -619,7 +685,7 @@ void MiviaRoverSystem::comm_thread_entry_()
         out.rear_right = 0;
 
       }
-      else
+      else 
       {
         /* Publish last valid command if available */
         if (cmd_valid_.load(std::memory_order_acquire))
@@ -634,29 +700,14 @@ void MiviaRoverSystem::comm_thread_entry_()
           out.front_right = cmd.rpm[2];
           out.rear_right = cmd.rpm[3];
 
-          //Data rewriting for loggign purposes, in the final version will it will be reverted to the original value
-          out.header.stamp.sec = cmd.t_start_dds_ns /1000000000LL;
-          out.header.stamp.nanosec = cmd.t_start_dds_ns %1000000000LL;
-
         }
         else
         {
-          //Added in this case only for measure the times, it will be delated
-          const std::uint32_t seq = cmd_seq_.load(std::memory_order_acquire);
-          const std::size_t idx = static_cast<std::size_t>(seq & 1U);
-
-          const CommandSample cmd = cmd_buf_[idx];
-
           /* No command yet: publish zeros (safe default) */
           out.front_left = 0;
           out.rear_left = 0;
           out.front_right = 0;
           out.rear_right = 0;
-
-          //Data rewriting for loggign purposes, in the final version will it will be reverted to the original value
-          out.header.stamp.sec = cmd.t_start_dds_ns /1000000000LL;
-          out.header.stamp.nanosec = cmd.t_start_dds_ns %1000000000LL;
-
         }
       }
 
@@ -664,9 +715,34 @@ void MiviaRoverSystem::comm_thread_entry_()
 
     }
 
-    std::this_thread::sleep_for(sleep_dur);
+    //std::this_thread::sleep_for(sleep_dur);
+    rate.sleep();
   }
 }
+
+void MiviaRoverSystem::logging_thread_entry_() {
+    std::ofstream log_file("/tmp/log_with_socketcan.csv", std::ios::out | std::ios::trunc);
+    if (log_file.is_open()) log_file << "t_start_ns,t_end_ns\n";
+
+    while(logging_is_running_.load()) {
+      size_t tail = log_tail_.load(std::memory_order_relaxed);
+
+      std::unique_lock<std::mutex> lock(log_mutex_);
+      log_cv_.wait(lock, [this, &tail] {
+        return (tail != log_head_.load(std::memory_order_acquire)) || !logging_is_running_.load();
+      });
+      if(!logging_is_running_.load() && (tail == log_head_.load(std::memory_order_acquire))) break;
+
+      size_t head = log_head_.load(std::memory_order_acquire);
+
+      while(tail != head) {
+        log_file << log_buffer_[tail].t_start_ns << "," << log_buffer_[tail].t_end_ns << "\n";
+        tail = (tail + 1) % 4096;
+      }
+      log_tail_.store(tail, std::memory_order_release);
+    }
+    if (log_file.is_open()) log_file.close();
+  }
 
 }  // namespace mivia_rover_platform
 

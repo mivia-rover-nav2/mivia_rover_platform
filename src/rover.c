@@ -31,7 +31,7 @@
 
 #include <string.h>
 
-#include "rover.h"
+#include "mivia_rover_platform/rover.h"
 
 static inline uint8_t pack_left_shift_u16(
     uint16_t value,

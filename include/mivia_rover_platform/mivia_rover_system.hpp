@@ -105,14 +105,13 @@ private:
   {
     std::array<std::int32_t, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
-    std::uint64_t t_start_dds_ns;
     bool valid;
   };
 
   struct LogEntry {
     uint64_t seq;
-    uint64_t t_generated_ns;
-    uint64_t t_published_ns;
+    uint64_t t_start_ns;
+    uint64_t t_end_ns;
   };
 
   void encoder_callback_(const mivia_rover_can_msgs::msg::EncoderRpms::SharedPtr msg);
@@ -160,6 +159,9 @@ private:
   rclcpp::executors::SingleThreadedExecutor::SharedPtr exec_;
   std::thread comm_thread_;
   std::atomic<bool> comm_running_;
+
+  //it will be used for made a passive waiting of the thread
+  std::atomic<bool> dds_has_new_data_{false};
 
   /* ---------- RT buffers ---------- */
   realtime_tools::RealtimeBuffer<EncoderSample> encoder_buffer_;
