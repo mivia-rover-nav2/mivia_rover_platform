@@ -96,7 +96,7 @@ private:
   {
     std::array<double, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
-    //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion
+    //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion. Also for time estimation of read function.
     std::uint64_t t_start_dds_ns;
     bool valid;
   };
@@ -108,8 +108,7 @@ private:
     bool valid;
   };
 
-  struct LogEntry {
-    uint64_t seq;
+  struct LogEntryRead {
     uint64_t t_start_ns;
     uint64_t t_end_ns;
   };
@@ -188,7 +187,7 @@ private:
 
   /* ---------- Time Logging ---------- */
   static constexpr std::size_t kLogBufferSize = 4096U;
-  std::array<LogEntry, kLogBufferSize> log_buffer_;
+  std::array<LogEntryRead, kLogBufferSize> log_buffer_;
   std::atomic<std::size_t> log_head_{0};
   std::atomic<std::size_t> log_tail_{0};
 

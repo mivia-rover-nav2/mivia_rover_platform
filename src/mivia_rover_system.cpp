@@ -482,6 +482,10 @@ void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::Encode
 {
   EncoderSample s;
 
+  //taking the starting time of the flow od reading messages.
+  auto now_steady_clock = std::chrono::steady_clock::now();
+  s.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+
   /* Message field order: [front_left, rear_left, front_right, rear_right] */
   s.rpm[0] = msg->front_left;
   s.rpm[1] = msg->rear_left;
@@ -555,6 +559,18 @@ hardware_interface::return_type MiviaRoverSystem::read(
     hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
   }
 
+  //Ending Timestamp for read
+  auto now_steady_clock = std::chrono::steady_clock::now();
+  uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+  size_t head = log_head_.load(std::memory_order_relaxed);
+  size_t next_head = (head + 1) % 4096;
+  if (next_head != log_tail_.load(std::memory_order_acquire)) {
+    log_buffer_[head].t_start_ns = enc->t_start_dds_ns;
+    log_buffer_[head].t_end_ns = t_end_ns;
+    log_head_.store(next_head, std::memory_order_release);
+    log_cv_.notify_one();
+  }
+
   return hardware_interface::return_type::OK;
 }
 
@@ -565,9 +581,6 @@ hardware_interface::return_type MiviaRoverSystem::write(
   CommandSample cmd;
   cmd.valid = true;
   cmd.stamp_ns = static_cast<std::uint64_t>(time.nanoseconds());
-
-  auto now_steady_clock = std::chrono::steady_clock::now();
-  uint64_t t_start_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
 
   for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
   {
@@ -595,17 +608,6 @@ hardware_interface::return_type MiviaRoverSystem::write(
 
     //CAN Transmission
     ::write(can_socket_fd_, &frame, sizeof(struct can_frame));
-    now_steady_clock = std::chrono::steady_clock::now();
-    uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
-
-    size_t head = log_head_.load(std::memory_order_relaxed);
-    size_t next_head = (head + 1) % 4096;
-    if (next_head != log_tail_.load(std::memory_order_acquire)) {
-      log_buffer_[head].t_start_ns = t_start_ns;
-      log_buffer_[head].t_end_ns = t_end_ns;
-      log_head_.store(next_head, std::memory_order_release);
-      log_cv_.notify_one();
-    }
   }
 
   /* Lock-free double-buffer publish: sequence counter selects active buffer */
@@ -721,7 +723,7 @@ void MiviaRoverSystem::comm_thread_entry_()
 }
 
 void MiviaRoverSystem::logging_thread_entry_() {
-    std::ofstream log_file("/tmp/log_with_socketcan.csv", std::ios::out | std::ios::trunc);
+    std::ofstream log_file("/tmp/log_read_baseline.csv", std::ios::out | std::ios::trunc);
     if (log_file.is_open()) log_file << "t_start_ns,t_end_ns\n";
 
     while(logging_is_running_.load()) {
