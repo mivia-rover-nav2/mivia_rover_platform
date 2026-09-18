@@ -46,6 +46,9 @@
 #include <fstream>
 #include <chrono>
 
+#include <linux/can.h>
+#include <linux/can/raw.h>
+
 // extern "C" {
 //   #include "rover.h"
 // }s
@@ -92,14 +95,15 @@ private:
   static constexpr std::size_t kNumWheelJoints = 4U;
 
   /* Message field order convention: [front_left, rear_left, front_right, rear_right] */
-  struct EncoderSample
-  {
-    std::array<double, kNumWheelJoints> rpm;
-    std::uint64_t stamp_ns;
-    //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion. Also for time estimation of read function.
-    std::uint64_t t_start_dds_ns;
-    bool valid;
-  };
+  //Removing struct used by ros2socketcan, because, bypassing ros2socketcan we will use a look free queue for the data read from socketCAN
+  // struct EncoderSample
+  // {
+  //   std::array<double, kNumWheelJoints> rpm;
+  //   std::uint64_t stamp_ns;
+  //   //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion. Also for time estimation of read function.
+  //   std::uint64_t t_start_dds_ns;
+  //   bool valid;
+  // };
 
   struct CommandSample
   {
@@ -153,7 +157,7 @@ private:
 
   /* ---------- ROS comm (NON-RT) ---------- */
   rclcpp::Node::SharedPtr comm_node_;
-  rclcpp::Subscription<mivia_rover_can_msgs::msg::EncoderRpms>::SharedPtr encoder_sub_;
+  // rclcpp::Subscription<mivia_rover_can_msgs::msg::EncoderRpms>::SharedPtr encoder_sub_;
   rclcpp::Publisher<mivia_rover_can_msgs::msg::Reference>::SharedPtr reference_pub_;
   rclcpp::executors::SingleThreadedExecutor::SharedPtr exec_;
   std::thread comm_thread_;
@@ -163,7 +167,8 @@ private:
   std::atomic<bool> dds_has_new_data_{false};
 
   /* ---------- RT buffers ---------- */
-  realtime_tools::RealtimeBuffer<EncoderSample> encoder_buffer_;
+  //Unused in the implementation without ros2socketcan
+  //realtime_tools::RealtimeBuffer<EncoderSample> encoder_buffer_;
   /* ---------- RT command double-buffer (lock-free) ---------- */
   std::array<CommandSample, 2U> cmd_buf_;
   std::atomic<std::uint32_t> cmd_seq_;
@@ -197,6 +202,31 @@ private:
   std::mutex log_mutex_;
   std::condition_variable log_cv_;
   void logging_thread_entry_();
+
+  /* ---------- Thread Rx-CAN Parameters ---------- */
+  static constexpr std::size_t kRxQueueSize = 128U;
+  static constexpr int kRxThreadTimeoutMs = 100; //Timeout for select() function
+
+  struct RxSample {
+    std::array<double, kNumWheelJoints> rpm;
+    std::uint64_t t_arrival_ns;
+  };
+
+  /* ---------- LockFree Queue ---------- */
+  //Queue for position integral
+  std::array<RxSample, kRxQueueSize> rx_queue_;
+  std::atomic<std::size_t> rx_head_{0};
+  std::atomic<std::size_t> rx_tail_{0};
+
+  realtime_tools::RealtimeBuffer<std::array<double, kNumWheelJoints>> latest_velocities_rpm_;
+
+  //timesampt of last sample, for calculate dt
+  std::uint64_t last_integration_time_ns_{0};
+
+  /* ---------- Thread CAN-RX ---------- */
+  std::thread can_rx_thread_;
+  std::atomic<bool> can_rx_running_{false};
+  void can_rx_thread_entry_();
 };
 
 }  // namespace mivia_rover_platform

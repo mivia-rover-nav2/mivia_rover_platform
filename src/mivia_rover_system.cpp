@@ -19,9 +19,9 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
-#include <linux/can.h>
-#include <linux/can/raw.h>
 #include <unistd.h>
+
+#include <linux/sockios.h>
 
 
 extern "C" {
@@ -302,16 +302,16 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_init(
 
   fault_stop_.store(false);
 
-  {
-    EncoderSample e;
-    e.rpm[0] = 0.0;
-    e.rpm[1] = 0.0;
-    e.rpm[2] = 0.0;
-    e.rpm[3] = 0.0;
-    e.stamp_ns = 0ULL;
-    e.valid = false;
-    encoder_buffer_.writeFromNonRT(e);
-  }
+  // {
+  //   EncoderSample e;
+  //   e.rpm[0] = 0.0;
+  //   e.rpm[1] = 0.0;
+  //   e.rpm[2] = 0.0;
+  //   e.rpm[3] = 0.0;
+  //   e.stamp_ns = 0ULL;
+  //   e.valid = false;
+  //   encoder_buffer_.writeFromNonRT(e);
+  // }
 
   /* Command double-buffer init */
   cmd_seq_.store(0U);
@@ -347,11 +347,12 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_configure(
   reference_pub_ =
     comm_node_->create_publisher<mivia_rover_can_msgs::msg::Reference>(reference_topic_, reference_qos);
 
-  encoder_sub_ =
-    comm_node_->create_subscription<mivia_rover_can_msgs::msg::EncoderRpms>(
-      encoder_topic_,
-      encoder_qos,
-      std::bind(&MiviaRoverSystem::encoder_callback_, this, std::placeholders::_1));
+  //removing the subscription to DDS
+  // encoder_sub_ =
+  //  comm_node_->create_subscription<mivia_rover_can_msgs::msg::EncoderRpms>(
+  //    encoder_topic_,
+  //    encoder_qos,
+  //    std::bind(&MiviaRoverSystem::encoder_callback_, this, std::placeholders::_1));
 
   exec_->add_node(comm_node_);
   start_comm_thread_();
@@ -369,7 +370,7 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_cleanup(
     exec_->remove_node(comm_node_);
   }
 
-  encoder_sub_.reset();
+  // encoder_sub_.reset();
   reference_pub_.reset();
   exec_.reset();
   comm_node_.reset();
@@ -407,6 +408,11 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
 
   can_socket_fd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
   if (can_socket_fd_ >= 0) {
+    struct can_filter rfilter[1]; //for filter the msg in Rx, so we can read only the msg that are interesting for us (ID 0x0b)
+    rfilter[0].can_id = ROVER_ENCODER_RPMS_FRAME_ID;
+    rfilter[0].can_mask = CAN_SFF_MASK;
+    setsockopt(can_socket_fd_, SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter));
+
     ifreq ifr;
     std::strcpy(ifr.ifr_name, "can1");
     ioctl(can_socket_fd_, SIOCGIFINDEX, &ifr);
@@ -415,6 +421,19 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
     addr.can_ifindex = ifr.ifr_ifindex;
     ::bind(can_socket_fd_, (struct sockaddr *)&addr, sizeof(addr));
   }
+
+  rx_head_.store(0);
+  rx_tail_.store(0);
+
+  last_integration_time_ns_ = static_cast <std::uint64_t>(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count());
+
+  std::array<double, kNumWheelJoints> init_rpm = {0.0, 0.0, 0.0, 0.0};
+  latest_velocities_rpm_.writeFromNonRT(init_rpm);
+
+  can_rx_running_.store(true);
+  can_rx_thread_ = std::thread(&MiviaRoverSystem::can_rx_thread_entry_, this);
 
   /* Activation of Log Thread */
   log_head_.store(0);
@@ -441,6 +460,9 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
     close(can_socket_fd_);
     can_socket_fd_ = -1;
   }
+
+  can_rx_running_.store(false);
+  if(can_rx_thread_.joinable()) can_rx_thread_.join();
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -478,98 +500,161 @@ std::vector<hardware_interface::CommandInterface> MiviaRoverSystem::export_comma
   return out;
 }
 
-void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::EncoderRpms::SharedPtr msg)
-{
-  EncoderSample s;
+// Interrupting the listening from DDS
+// void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::EncoderRpms::SharedPtr msg)
+// {
+//   EncoderSample s;
 
-  //taking the starting time of the flow od reading messages.
-  auto now_steady_clock = std::chrono::steady_clock::now();
-  s.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+//   //taking the starting time of the flow od reading messages.
+//   auto now_steady_clock = std::chrono::steady_clock::now();
+//   s.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
 
-  /* Message field order: [front_left, rear_left, front_right, rear_right] */
-  s.rpm[0] = msg->front_left;
-  s.rpm[1] = msg->rear_left;
-  s.rpm[2] = msg->front_right;
-  s.rpm[3] = msg->rear_right;
+//   /* Message field order: [front_left, rear_left, front_right, rear_right] */
+//   s.rpm[0] = msg->front_left;
+//   s.rpm[1] = msg->rear_left;
+//   s.rpm[2] = msg->front_right;
+//   s.rpm[3] = msg->rear_right;
 
-  /* Timestamp always at reception to avoid clock inconsistencies */
-  s.stamp_ns = static_cast<std::uint64_t>(comm_node_->now().nanoseconds());
-  s.valid = true;
+//   /* Timestamp always at reception to avoid clock inconsistencies */
+//   s.stamp_ns = static_cast<std::uint64_t>(comm_node_->now().nanoseconds());
+//   s.valid = true;
 
-  encoder_buffer_.writeFromNonRT(s);
-}
+//   encoder_buffer_.writeFromNonRT(s);
+// }
 
 hardware_interface::return_type MiviaRoverSystem::read(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
-  const EncoderSample * const enc = encoder_buffer_.readFromRT();
-
-  if ((enc == nullptr) || (!enc->valid))
-  {
-    return hardware_interface::return_type::OK;
+  const auto * latest_rpm = latest_velocities_rpm_.readFromRT();
+  if (latest_rpm != nullptr) {
+    for (std::size_t k = 0U; k < kNumWheelJoints; ++k) {
+      hw_velocities_[wheel_joint_indices_[k]] = rpm_to_rad_s_((*latest_rpm)[k]);
+    }
   }
 
-  const std::uint64_t now_ns = static_cast<std::uint64_t>(time.nanoseconds());
-  const std::uint64_t age_ns = (now_ns >= enc->stamp_ns) ? (now_ns - enc->stamp_ns) : 0ULL;
-  const double age_sec = static_cast<double>(age_ns) * kNsToSec;
+  std::size_t tail = rx_tail_.load(std::memory_order_relaxed);
+  std::size_t head = rx_head_.load(std::memory_order_acquire);
 
-  if (age_sec > feedback_timeout_sec_)
-  {
+  bool has_logged = false;
+
+  //here we take all the velocities riceived from can, to make a more precise and accurate integration, fo obtain the hw_positions 
+  //and we also take the timestamp of it, so we don't have a fixed dt, but we obtain each dt from difference between every timestamp, also for improve the result
+  while ( tail != head ) {
+    const RxSample & sample = rx_queue_[tail];
+
+    double dt_sec = static_cast<double>(sample.t_arrival_ns - last_integration_time_ns_) * kNsToSec;
+
+    if (dt_sec > 0.0 && dt_sec < 0.5) {
+      for(std::size_t k = 0U; k < kNumWheelJoints; ++k) {
+        const std::size_t joint_i = wheel_joint_indices_[k];
+        double w_rad_s = rpm_to_rad_s_(sample.rpm[k]);
+        
+        hw_positions_[joint_i] += (w_rad_s * dt_sec);
+      }
+    }
+
+    const std::uint64_t now_ns = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    double time_since_last_msg_sec = static_cast<double>(now_ns - last_integration_time_ns_) * kNsToSec;
+
+    //checking last time we did integration, if is bigger than the timeout, set the hw_vel to 0
+    if (time_since_last_msg_sec >feedback_timeout_sec_) {
     consecutive_timeouts_++;
 
-    /* Fail-safe local state */
-    for (std::size_t i = 0U; i < kNumWheelJoints; ++i)
-    {
+    for (std::size_t i = 0U; i < kNumWheelJoints; ++i) {
       hw_velocities_[i] = 0.0;
     }
 
-    if (consecutive_timeouts_ >= max_consecutive_timeouts_)
-    {
-      /* Engage stop publishing */
+    if (consecutive_timeouts_ >= max_consecutive_timeouts_) {
       fault_stop_.store(true);
-      return hardware_interface::return_type::ERROR;
+    }
+  } else {
+    consecutive_timeouts_ = 0U;
+    fault_stop_.store(false);
+  }
+
+    std::size_t log_h = log_head_.load(std::memory_order_relaxed);
+    std::size_t next_log_h = (log_h +1U) % kLogBufferSize;
+
+    if(next_log_h != log_tail_.load(std::memory_order_acquire)) {
+      log_buffer_[log_h].t_start_ns = sample.t_arrival_ns;
+      log_buffer_[log_h].t_end_ns = now_ns;
+      log_head_.store(next_log_h, std::memory_order_release);
+      has_logged = true;
     }
 
-    /* Degrade but keep running */
-    fault_stop_.store(true);
-    return hardware_interface::return_type::OK;
+    last_integration_time_ns_ = sample.t_arrival_ns;
+    tail = (tail + 1U) % kRxQueueSize;
   }
 
-  /* Feedback healthy */
-  consecutive_timeouts_ = 0U;
-  fault_stop_.store(false);
+  rx_tail_.store(tail, std::memory_order_release);
 
-  /* Integrate positions derived from measured wheel angular velocities */
-  double dt = period.seconds();
-  if (dt < 0.0)
-  {
-    dt = 0.0;
-  }
-  else
-  {
-    /* no-op */
-  }
-
-  for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
-  {
-    const std::size_t joint_i = wheel_joint_indices_[k];
-    const double w = rpm_to_rad_s_(enc->rpm[k]);
-
-    hw_velocities_[joint_i] = w;
-    hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
-  }
-
-  //Ending Timestamp for read
-  auto now_steady_clock = std::chrono::steady_clock::now();
-  uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
-  size_t head = log_head_.load(std::memory_order_relaxed);
-  size_t next_head = (head + 1) % 4096;
-  if (next_head != log_tail_.load(std::memory_order_acquire)) {
-    log_buffer_[head].t_start_ns = enc->t_start_dds_ns;
-    log_buffer_[head].t_end_ns = t_end_ns;
-    log_head_.store(next_head, std::memory_order_release);
+  if (has_logged) {
     log_cv_.notify_one();
   }
+
+  // const std::uint64_t age_ns = (now_ns >= enc->stamp_ns) ? (now_ns - enc->stamp_ns) : 0ULL;
+  // const double age_sec = static_cast<double>(age_ns) * kNsToSec;
+
+  // if (age_sec > feedback_timeout_sec_)
+  // {
+  //   consecutive_timeouts_++;
+
+  //   /* Fail-safe local state */
+  //   for (std::size_t i = 0U; i < kNumWheelJoints; ++i)
+  //   {
+  //     hw_velocities_[i] = 0.0;
+  //   }
+
+  //   if (consecutive_timeouts_ >= max_consecutive_timeouts_)
+  //   {
+  //     /* Engage stop publishing */
+  //     fault_stop_.store(true);
+  //     return hardware_interface::return_type::ERROR;
+  //   }
+
+  //   /* Degrade but keep running */
+  //   fault_stop_.store(true);
+  //   return hardware_interface::return_type::OK;
+  // }
+
+  // /* Feedback healthy */
+  // consecutive_timeouts_ = 0U;
+  // fault_stop_.store(false);
+
+  // /* Integrate positions derived from measured wheel angular velocities */
+  // double dt = period.seconds();
+  // if (dt < 0.0)
+  // {
+  //   dt = 0.0;
+  // }
+  // else
+  // {
+  //   /* no-op */
+  // }
+
+  // for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
+  // {
+  //   const std::size_t joint_i = wheel_joint_indices_[k];
+  //   const double w = rpm_to_rad_s_(enc->rpm[k]);
+
+  //   hw_velocities_[joint_i] = w;
+  //   hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
+  // }
+
+  // //Ending Timestamp for read
+  // auto now_steady_clock = std::chrono::steady_clock::now();
+  // uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+  // size_t head = log_head_.load(std::memory_order_relaxed);
+  // size_t next_head = (head + 1) % 4096;
+  // if (next_head != log_tail_.load(std::memory_order_acquire)) {
+  //   log_buffer_[head].t_start_ns = enc->t_start_dds_ns;
+  //   log_buffer_[head].t_end_ns = t_end_ns;
+  //   log_head_.store(next_head, std::memory_order_release);
+  //   log_cv_.notify_one();
+  // }
 
   return hardware_interface::return_type::OK;
 }
@@ -723,7 +808,7 @@ void MiviaRoverSystem::comm_thread_entry_()
 }
 
 void MiviaRoverSystem::logging_thread_entry_() {
-    std::ofstream log_file("/tmp/log_read_baseline.csv", std::ios::out | std::ios::trunc);
+    std::ofstream log_file("/tmp/log_read_modified.csv", std::ios::out | std::ios::trunc);
     if (log_file.is_open()) log_file << "t_start_ns,t_end_ns\n";
 
     while(logging_is_running_.load()) {
@@ -745,6 +830,57 @@ void MiviaRoverSystem::logging_thread_entry_() {
     }
     if (log_file.is_open()) log_file.close();
   }
+
+void MiviaRoverSystem::can_rx_thread_entry_(){
+  struct can_frame frame;
+
+  while(can_rx_running_.load()) {
+    if (can_socket_fd_ < 0 ) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(can_socket_fd_, &read_fds);
+
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = kRxThreadTimeoutMs * 1000;
+
+    int ret = select(can_socket_fd_ + 1, &read_fds, NULL, NULL, &timeout);
+
+    if (ret > 0 && FD_ISSET(can_socket_fd_, &read_fds)) {
+      int nbytes = ::read(can_socket_fd_, &frame, sizeof(struct can_frame));
+
+      if (nbytes == sizeof(struct can_frame)) {
+        std::uint64_t arrival_time_ns = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        
+        struct rover_encoder_rpms_t unpacked_msg;
+        rover_encoder_rpms_unpack(&unpacked_msg, frame.data, frame.can_dlc);
+
+        std::array<double, kNumWheelJoints> current_rpms;
+        current_rpms[0] = rover_encoder_rpms_front_left_decode(unpacked_msg.front_left)/182.0;
+        current_rpms[1] = rover_encoder_rpms_rear_left_decode(unpacked_msg.rear_left)/182.0;
+        current_rpms[2] = rover_encoder_rpms_front_right_decode(unpacked_msg.front_right)/182.0;
+        current_rpms[3] = rover_encoder_rpms_rear_right_decode(unpacked_msg.rear_right)/182.0;
+
+        latest_velocities_rpm_.writeFromNonRT(current_rpms);
+
+        std::size_t head = rx_head_.load(std::memory_order_relaxed);
+        std::size_t next_head = (head + 1U) % kRxQueueSize;
+
+        if (next_head != rx_tail_.load(std::memory_order_acquire)) {
+          rx_queue_[head].rpm = current_rpms;
+          rx_queue_[head].t_arrival_ns = arrival_time_ns;
+          rx_head_.store(next_head, std::memory_order_release);
+        }
+      }
+    }
+  }
+}
 
 }  // namespace mivia_rover_platform
 
