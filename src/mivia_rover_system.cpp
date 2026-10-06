@@ -416,12 +416,6 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
     ::bind(can_socket_fd_, (struct sockaddr *)&addr, sizeof(addr));
   }
 
-  /* Activation of Log Thread */
-  log_head_.store(0);
-  log_tail_.store(0);
-  logging_is_running_.store(true);
-  logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
-
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -430,11 +424,6 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
 {
   /* Optionally request stop */
   fault_stop_.store(true);
-
-  /* Logging Thread */
-  logging_is_running_.store(false);
-  log_cv_.notify_all();
-  if (logging_thread_.joinable()) logging_thread_.join();
 
   /* ScoketCAN */
   if(can_socket_fd_ >= 0) {
@@ -557,18 +546,6 @@ hardware_interface::return_type MiviaRoverSystem::read(
 
     hw_velocities_[joint_i] = w;
     hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
-  }
-
-  //Ending Timestamp for read
-  auto now_steady_clock = std::chrono::steady_clock::now();
-  uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
-  size_t head = log_head_.load(std::memory_order_relaxed);
-  size_t next_head = (head + 1) % 4096;
-  if (next_head != log_tail_.load(std::memory_order_acquire)) {
-    log_buffer_[head].t_start_ns = enc->t_start_dds_ns;
-    log_buffer_[head].t_end_ns = t_end_ns;
-    log_head_.store(next_head, std::memory_order_release);
-    log_cv_.notify_one();
   }
 
   return hardware_interface::return_type::OK;
@@ -722,29 +699,6 @@ void MiviaRoverSystem::comm_thread_entry_()
   }
 }
 
-void MiviaRoverSystem::logging_thread_entry_() {
-    std::ofstream log_file("/tmp/log_read_baseline.csv", std::ios::out | std::ios::trunc);
-    if (log_file.is_open()) log_file << "t_start_ns,t_end_ns\n";
-
-    while(logging_is_running_.load()) {
-      size_t tail = log_tail_.load(std::memory_order_relaxed);
-
-      std::unique_lock<std::mutex> lock(log_mutex_);
-      log_cv_.wait(lock, [this, &tail] {
-        return (tail != log_head_.load(std::memory_order_acquire)) || !logging_is_running_.load();
-      });
-      if(!logging_is_running_.load() && (tail == log_head_.load(std::memory_order_acquire))) break;
-
-      size_t head = log_head_.load(std::memory_order_acquire);
-
-      while(tail != head) {
-        log_file << log_buffer_[tail].t_start_ns << "," << log_buffer_[tail].t_end_ns << "\n";
-        tail = (tail + 1) % 4096;
-      }
-      log_tail_.store(tail, std::memory_order_release);
-    }
-    if (log_file.is_open()) log_file.close();
-  }
 
 }  // namespace mivia_rover_platform
 
