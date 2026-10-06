@@ -435,12 +435,6 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
   can_rx_running_.store(true);
   can_rx_thread_ = std::thread(&MiviaRoverSystem::can_rx_thread_entry_, this);
 
-  /* Activation of Log Thread */
-  log_head_.store(0);
-  log_tail_.store(0);
-  logging_is_running_.store(true);
-  logging_thread_ = std::thread(&MiviaRoverSystem::logging_thread_entry_, this);
-
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -449,11 +443,6 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
 {
   /* Optionally request stop */
   fault_stop_.store(true);
-
-  /* Logging Thread */
-  logging_is_running_.store(false);
-  log_cv_.notify_all();
-  if (logging_thread_.joinable()) logging_thread_.join();
 
   /* ScoketCAN */
   if(can_socket_fd_ >= 0) {
@@ -535,8 +524,6 @@ hardware_interface::return_type MiviaRoverSystem::read(
   std::size_t tail = rx_tail_.load(std::memory_order_relaxed);
   std::size_t head = rx_head_.load(std::memory_order_acquire);
 
-  bool has_logged = false;
-
   //here we take all the velocities riceived from can, to make a more precise and accurate integration, fo obtain the hw_positions 
   //and we also take the timestamp of it, so we don't have a fixed dt, but we obtain each dt from difference between every timestamp, also for improve the result
   while ( tail != head ) {
@@ -575,86 +562,11 @@ hardware_interface::return_type MiviaRoverSystem::read(
     fault_stop_.store(false);
   }
 
-    std::size_t log_h = log_head_.load(std::memory_order_relaxed);
-    std::size_t next_log_h = (log_h +1U) % kLogBufferSize;
-
-    if(next_log_h != log_tail_.load(std::memory_order_acquire)) {
-      log_buffer_[log_h].t_start_ns = sample.t_arrival_ns;
-      log_buffer_[log_h].t_end_ns = now_ns;
-      log_head_.store(next_log_h, std::memory_order_release);
-      has_logged = true;
-    }
-
     last_integration_time_ns_ = sample.t_arrival_ns;
     tail = (tail + 1U) % kRxQueueSize;
   }
 
   rx_tail_.store(tail, std::memory_order_release);
-
-  if (has_logged) {
-    log_cv_.notify_one();
-  }
-
-  // const std::uint64_t age_ns = (now_ns >= enc->stamp_ns) ? (now_ns - enc->stamp_ns) : 0ULL;
-  // const double age_sec = static_cast<double>(age_ns) * kNsToSec;
-
-  // if (age_sec > feedback_timeout_sec_)
-  // {
-  //   consecutive_timeouts_++;
-
-  //   /* Fail-safe local state */
-  //   for (std::size_t i = 0U; i < kNumWheelJoints; ++i)
-  //   {
-  //     hw_velocities_[i] = 0.0;
-  //   }
-
-  //   if (consecutive_timeouts_ >= max_consecutive_timeouts_)
-  //   {
-  //     /* Engage stop publishing */
-  //     fault_stop_.store(true);
-  //     return hardware_interface::return_type::ERROR;
-  //   }
-
-  //   /* Degrade but keep running */
-  //   fault_stop_.store(true);
-  //   return hardware_interface::return_type::OK;
-  // }
-
-  // /* Feedback healthy */
-  // consecutive_timeouts_ = 0U;
-  // fault_stop_.store(false);
-
-  // /* Integrate positions derived from measured wheel angular velocities */
-  // double dt = period.seconds();
-  // if (dt < 0.0)
-  // {
-  //   dt = 0.0;
-  // }
-  // else
-  // {
-  //   /* no-op */
-  // }
-
-  // for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
-  // {
-  //   const std::size_t joint_i = wheel_joint_indices_[k];
-  //   const double w = rpm_to_rad_s_(enc->rpm[k]);
-
-  //   hw_velocities_[joint_i] = w;
-  //   hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
-  // }
-
-  // //Ending Timestamp for read
-  // auto now_steady_clock = std::chrono::steady_clock::now();
-  // uint64_t t_end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
-  // size_t head = log_head_.load(std::memory_order_relaxed);
-  // size_t next_head = (head + 1) % 4096;
-  // if (next_head != log_tail_.load(std::memory_order_acquire)) {
-  //   log_buffer_[head].t_start_ns = enc->t_start_dds_ns;
-  //   log_buffer_[head].t_end_ns = t_end_ns;
-  //   log_head_.store(next_head, std::memory_order_release);
-  //   log_cv_.notify_one();
-  // }
 
   return hardware_interface::return_type::OK;
 }
@@ -806,30 +718,6 @@ void MiviaRoverSystem::comm_thread_entry_()
     rate.sleep();
   }
 }
-
-void MiviaRoverSystem::logging_thread_entry_() {
-    std::ofstream log_file("/tmp/log_read_modified.csv", std::ios::out | std::ios::trunc);
-    if (log_file.is_open()) log_file << "t_start_ns,t_end_ns\n";
-
-    while(logging_is_running_.load()) {
-      size_t tail = log_tail_.load(std::memory_order_relaxed);
-
-      std::unique_lock<std::mutex> lock(log_mutex_);
-      log_cv_.wait(lock, [this, &tail] {
-        return (tail != log_head_.load(std::memory_order_acquire)) || !logging_is_running_.load();
-      });
-      if(!logging_is_running_.load() && (tail == log_head_.load(std::memory_order_acquire))) break;
-
-      size_t head = log_head_.load(std::memory_order_acquire);
-
-      while(tail != head) {
-        log_file << log_buffer_[tail].t_start_ns << "," << log_buffer_[tail].t_end_ns << "\n";
-        tail = (tail + 1) % 4096;
-      }
-      log_tail_.store(tail, std::memory_order_release);
-    }
-    if (log_file.is_open()) log_file.close();
-  }
 
 void MiviaRoverSystem::can_rx_thread_entry_(){
   struct can_frame frame;
