@@ -524,21 +524,24 @@ hardware_interface::return_type MiviaRoverSystem::read(
   std::size_t tail = rx_tail_.load(std::memory_order_relaxed);
   std::size_t head = rx_head_.load(std::memory_order_acquire);
 
+  double dt_sec_nominal = 0.005;
+
   //here we take all the velocities riceived from can, to make a more precise and accurate integration, fo obtain the hw_positions 
   //and we also take the timestamp of it, so we don't have a fixed dt, but we obtain each dt from difference between every timestamp, also for improve the result
   while ( tail != head ) {
     const RxSample & sample = rx_queue_[tail];
 
-    double dt_sec = static_cast<double>(sample.t_arrival_ns - last_integration_time_ns_) * kNsToSec;
+    // double dt_sec = static_cast<double>(sample.t_arrival_ns - last_integration_time_ns_) * kNsToSec;
 
-    if (dt_sec > 0.0 && dt_sec < 0.5) {
+
+    //if (dt_sec > 0.0 && dt_sec < 0.5) {
       for(std::size_t k = 0U; k < kNumWheelJoints; ++k) {
         const std::size_t joint_i = wheel_joint_indices_[k];
         double w_rad_s = rpm_to_rad_s_(sample.rpm[k]);
         
-        hw_positions_[joint_i] += (w_rad_s * dt_sec);
+        hw_positions_[joint_i] += (w_rad_s * dt_sec_nominal);
       }
-    }
+    //}
 
     const std::uint64_t now_ns = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -719,7 +722,8 @@ void MiviaRoverSystem::comm_thread_entry_()
   }
 }
 
-void MiviaRoverSystem::can_rx_thread_entry_(){
+void MiviaRoverSystem::can_rx_thread_entry_()
+{
   struct can_frame frame;
 
   while(can_rx_running_.load()) {
@@ -739,31 +743,39 @@ void MiviaRoverSystem::can_rx_thread_entry_(){
     int ret = select(can_socket_fd_ + 1, &read_fds, NULL, NULL, &timeout);
 
     if (ret > 0 && FD_ISSET(can_socket_fd_, &read_fds)) {
-      int nbytes = ::read(can_socket_fd_, &frame, sizeof(struct can_frame));
-
-      if (nbytes == sizeof(struct can_frame)) {
-        std::uint64_t arrival_time_ns = static_cast<std::uint64_t>(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+      
+      //extraction of all Can Messeges recieved, with non-blocking while
+      while (true) {
+        int nbytes = ::recv(can_socket_fd_, &frame, sizeof(struct can_frame), MSG_DONTWAIT);
         
-        struct rover_encoder_rpms_t unpacked_msg;
-        rover_encoder_rpms_unpack(&unpacked_msg, frame.data, frame.can_dlc);
+        if (nbytes < 0) {
+          break; 
+        }
 
-        std::array<double, kNumWheelJoints> current_rpms;
-        current_rpms[0] = rover_encoder_rpms_front_left_decode(unpacked_msg.front_left)/182.0;
-        current_rpms[1] = rover_encoder_rpms_rear_left_decode(unpacked_msg.rear_left)/182.0;
-        current_rpms[2] = rover_encoder_rpms_front_right_decode(unpacked_msg.front_right)/182.0;
-        current_rpms[3] = rover_encoder_rpms_rear_right_decode(unpacked_msg.rear_right)/182.0;
+        if (nbytes == sizeof(struct can_frame)) {
+          std::uint64_t arrival_time_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count());
+          
+          struct rover_encoder_rpms_t unpacked_msg;
+          rover_encoder_rpms_unpack(&unpacked_msg, frame.data, frame.can_dlc);
 
-        latest_velocities_rpm_.writeFromNonRT(current_rpms);
+          std::array<double, kNumWheelJoints> current_rpms;
+          current_rpms[0] = rover_encoder_rpms_front_left_decode(unpacked_msg.front_left) / 182.0;
+          current_rpms[1] = rover_encoder_rpms_rear_left_decode(unpacked_msg.rear_left) / 182.0;
+          current_rpms[2] = rover_encoder_rpms_front_right_decode(unpacked_msg.front_right) / 182.0;
+          current_rpms[3] = rover_encoder_rpms_rear_right_decode(unpacked_msg.rear_right) / 182.0;
 
-        std::size_t head = rx_head_.load(std::memory_order_relaxed);
-        std::size_t next_head = (head + 1U) % kRxQueueSize;
+          latest_velocities_rpm_.writeFromNonRT(current_rpms);
 
-        if (next_head != rx_tail_.load(std::memory_order_acquire)) {
-          rx_queue_[head].rpm = current_rpms;
-          rx_queue_[head].t_arrival_ns = arrival_time_ns;
-          rx_head_.store(next_head, std::memory_order_release);
+          std::size_t head = rx_head_.load(std::memory_order_relaxed);
+          std::size_t next_head = (head + 1U) % kRxQueueSize;
+
+          if (next_head != rx_tail_.load(std::memory_order_acquire)) {
+            rx_queue_[head].rpm = current_rpms;
+            rx_queue_[head].t_arrival_ns = arrival_time_ns;
+            rx_head_.store(next_head, std::memory_order_release);
+          }
         }
       }
     }
