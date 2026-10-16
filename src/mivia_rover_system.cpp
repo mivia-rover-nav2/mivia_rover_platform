@@ -330,6 +330,8 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_init(
     cmd_buf_[1] = c;
   }
 
+  rt_logger_.init(120000U, "/home/miviarover/Desktop/pre_read_ros2_control.csv"); // 20 minuti a 100 Hz in RAM
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -431,6 +433,8 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
     can_socket_fd_ = -1;
   }
 
+  rt_logger_.flush_to_disk();
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -472,8 +476,7 @@ void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::Encode
   EncoderSample s;
 
   //taking the starting time of the flow od reading messages.
-  auto now_steady_clock = std::chrono::steady_clock::now();
-  s.t_start_dds_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now_steady_clock.time_since_epoch()).count();
+  s.t_start_dds_ns = RtControlLoopProfiler::now_monotonic_ns();
 
   /* Message field order: [front_left, rear_left, front_right, rear_right] */
   s.rpm[0] = msg->front_left;
@@ -491,10 +494,14 @@ void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::Encode
 hardware_interface::return_type MiviaRoverSystem::read(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
+  if (sync_achieved_) {
+      rt_logger_.begin_cycle(); //start logging
+  }
   const EncoderSample * const enc = encoder_buffer_.readFromRT();
 
   if ((enc == nullptr) || (!enc->valid))
   {
+    warmup_cycles_ = 0U;
     return hardware_interface::return_type::OK;
   }
 
@@ -505,6 +512,7 @@ hardware_interface::return_type MiviaRoverSystem::read(
   if (age_sec > feedback_timeout_sec_)
   {
     consecutive_timeouts_++;
+    warmup_cycles_ = 0U;
 
     /* Fail-safe local state */
     for (std::size_t i = 0U; i < kNumWheelJoints; ++i)
@@ -548,12 +556,24 @@ hardware_interface::return_type MiviaRoverSystem::read(
     hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
   }
 
+  if (sync_achieved_) {
+    rt_logger_.end_read(enc->t_start_dds_ns, 1U);
+  } else {
+    warmup_cycles_++;
+    if (warmup_cycles_ >= REQUIRED_WARMUP_CYCLES) {
+      sync_achieved_ = true;
+    }
+  }
+
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type MiviaRoverSystem::write(
   const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
+  if (sync_achieved_) {
+    rt_logger_.begin_write();
+  }
   /* If we are in fault-stop, command buffer can still be updated, but publisher will output zeros */
   CommandSample cmd;
   cmd.valid = true;
@@ -585,6 +605,10 @@ hardware_interface::return_type MiviaRoverSystem::write(
 
     //CAN Transmission
     ::write(can_socket_fd_, &frame, sizeof(struct can_frame));
+
+    if (sync_achieved_) {
+    rt_logger_.end_write_and_record();
+  }
   }
 
   /* Lock-free double-buffer publish: sequence counter selects active buffer */
