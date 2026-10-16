@@ -330,6 +330,8 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_init(
     cmd_buf_[1] = c;
   }
 
+  rt_logger_.init(120000U, "/home/miviarover/Desktop/post_read_ros2_control.csv"); // 20 minuti a 100 Hz in RAM
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -453,6 +455,8 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
   can_rx_running_.store(false);
   if(can_rx_thread_.joinable()) can_rx_thread_.join();
 
+  rt_logger_.flush_to_disk();
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -514,6 +518,9 @@ std::vector<hardware_interface::CommandInterface> MiviaRoverSystem::export_comma
 hardware_interface::return_type MiviaRoverSystem::read(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
+  if (sync_achieved_) {
+      rt_logger_.begin_cycle(); //Start Logging
+  }
   const auto * latest_rpm = latest_velocities_rpm_.readFromRT();
   if (latest_rpm != nullptr) {
     for (std::size_t k = 0U; k < kNumWheelJoints; ++k) {
@@ -525,6 +532,8 @@ hardware_interface::return_type MiviaRoverSystem::read(
   std::size_t head = rx_head_.load(std::memory_order_acquire);
 
   double dt_sec_nominal = 0.005;
+  std::uint32_t popped_count = 0U;
+  std::uint64_t latest_sample_arrival_ns = 0ULL;
 
   //here we take all the velocities riceived from can, to make a more precise and accurate integration, fo obtain the hw_positions 
   //and we also take the timestamp of it, so we don't have a fixed dt, but we obtain each dt from difference between every timestamp, also for improve the result
@@ -543,33 +552,41 @@ hardware_interface::return_type MiviaRoverSystem::read(
       }
     //}
 
-    const std::uint64_t now_ns = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
+    last_integration_time_ns_ = sample.t_arrival_ns;
+    latest_sample_arrival_ns  = sample.t_arrival_ns;
+    tail = (tail + 1U) % kRxQueueSize;
+    popped_count++;
+  }
+  rx_tail_.store(tail, std::memory_order_release);
 
-    double time_since_last_msg_sec = static_cast<double>(now_ns - last_integration_time_ns_) * kNsToSec;
+  //checking last time we did integration, if is bigger than the timeout, set the hw_vel to 0
+  //moved the check out of the while, for checking also when didn't arrived any message
+  const std::uint64_t now_ns = RtControlLoopProfiler::now_monotonic_ns();
+  const double time_since_last_msg_sec = static_cast<double>(now_ns - last_integration_time_ns_) * kNsToSec;
 
-    //checking last time we did integration, if is bigger than the timeout, set the hw_vel to 0
-    if (time_since_last_msg_sec >feedback_timeout_sec_) {
+  if (time_since_last_msg_sec > feedback_timeout_sec_) {
     consecutive_timeouts_++;
-
-    for (std::size_t i = 0U; i < kNumWheelJoints; ++i) {
-      hw_velocities_[i] = 0.0;
-    }
-
-    if (consecutive_timeouts_ >= max_consecutive_timeouts_) {
-      fault_stop_.store(true);
-    }
+    for (std::size_t i = 0U; i < kNumWheelJoints; ++i) hw_velocities_[i] = 0.0;
+    if (consecutive_timeouts_ >= max_consecutive_timeouts_) fault_stop_.store(true);
   } else {
     consecutive_timeouts_ = 0U;
     fault_stop_.store(false);
   }
-
-    last_integration_time_ns_ = sample.t_arrival_ns;
-    tail = (tail + 1U) % kRxQueueSize;
+  
+if (!sync_achieved_) {
+      if ((time_since_last_msg_sec <= feedback_timeout_sec_) && (popped_count > 0U)) {
+          warmup_cycles_++;
+          if (warmup_cycles_ >= REQUIRED_WARMUP_CYCLES) {
+              sync_achieved_ = true;
+          }
+      } else {
+          warmup_cycles_ = 0U;
+      }
   }
 
-  rx_tail_.store(tail, std::memory_order_release);
+  if (sync_achieved_) {
+      rt_logger_.end_read(latest_sample_arrival_ns, popped_count);
+  }
 
   return hardware_interface::return_type::OK;
 }
@@ -577,6 +594,7 @@ hardware_interface::return_type MiviaRoverSystem::read(
 hardware_interface::return_type MiviaRoverSystem::write(
   const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
+  rt_logger_.begin_write();
   /* If we are in fault-stop, command buffer can still be updated, but publisher will output zeros */
   CommandSample cmd;
   cmd.valid = true;
@@ -608,6 +626,7 @@ hardware_interface::return_type MiviaRoverSystem::write(
 
     //CAN Transmission
     ::write(can_socket_fd_, &frame, sizeof(struct can_frame));
+    rt_logger_.end_write_and_record();
   }
 
   /* Lock-free double-buffer publish: sequence counter selects active buffer */
@@ -753,10 +772,8 @@ void MiviaRoverSystem::can_rx_thread_entry_()
         }
 
         if (nbytes == sizeof(struct can_frame)) {
-          std::uint64_t arrival_time_ns = static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-              std::chrono::steady_clock::now().time_since_epoch()).count());
-          
+          std::uint64_t arrival_time_ns = RtControlLoopProfiler::now_monotonic_ns();
+
           struct rover_encoder_rpms_t unpacked_msg;
           rover_encoder_rpms_unpack(&unpacked_msg, frame.data, frame.can_dlc);
 
