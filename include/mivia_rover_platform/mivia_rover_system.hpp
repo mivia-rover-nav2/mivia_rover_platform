@@ -49,6 +49,8 @@
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
+#include "rt_control_loop_profiler.hpp"
+
 // extern "C" {
 //   #include "rover.h"
 // }s
@@ -110,11 +112,7 @@ private:
     std::array<std::int32_t, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
     bool valid;
-  };
-
-  struct LogEntryRead {
-    uint64_t t_start_ns;
-    uint64_t t_end_ns;
+    std::uint64_t t_start_steady_ns{0ULL};
   };
 
   void encoder_callback_(const mivia_rover_can_msgs::msg::EncoderRpms::SharedPtr msg);
@@ -191,10 +189,10 @@ private:
   int can_socket_fd_ = -1;
 
   /* ---------- Time Logging ---------- */
-  static constexpr std::size_t kLogBufferSize = 4096U;
-  std::array<LogEntryRead, kLogBufferSize> log_buffer_;
-  std::atomic<std::size_t> log_head_{0};
-  std::atomic<std::size_t> log_tail_{0};
+  // static constexpr std::size_t kLogBufferSize = 4096U;
+  // std::array<LogEntryRead, kLogBufferSize> log_buffer_;
+  // std::atomic<std::size_t> log_head_{0};
+  // std::atomic<std::size_t> log_tail_{0};
 
   /* ---------- Logging Thread with sync without busywaiut---------- */
   std::thread logging_thread_;
@@ -227,6 +225,11 @@ private:
   std::thread can_rx_thread_;
   std::atomic<bool> can_rx_running_{false};
   void can_rx_thread_entry_();
+
+  RtControlLoopProfiler rt_logger_;
+  bool sync_achieved_{false};
+  uint32_t warmup_cycles_{0U};
+  const uint32_t REQUIRED_WARMUP_CYCLES{500U}; //10 seconds wait
 };
 
 }  // namespace mivia_rover_platform
