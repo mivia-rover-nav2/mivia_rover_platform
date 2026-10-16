@@ -45,6 +45,7 @@
 #include <mutex>
 #include <fstream>
 #include <chrono>
+#include "rt_control_loop_profiler.hpp"
 
 // extern "C" {
 //   #include "rover.h"
@@ -97,7 +98,7 @@ private:
     std::array<double, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
     //Added for take the start time of the CAN message through DDS. It is just a dummy variable for testing and jitter calcultion. Also for time estimation of read function.
-    std::uint64_t t_start_dds_ns;
+    std::uint64_t t_start_dds_ns{0ULL};
     bool valid;
   };
 
@@ -105,6 +106,7 @@ private:
   {
     std::array<std::int32_t, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
+    std::uint64_t t_start_steady_ns{0ULL};
     bool valid;
   };
 
@@ -197,6 +199,12 @@ private:
   std::mutex log_mutex_;
   std::condition_variable log_cv_;
   void logging_thread_entry_();
+
+  RtControlLoopProfiler rt_logger_;
+
+  bool sync_achieved_{false};
+  uint32_t warmup_cycles_{0U};
+  const uint32_t REQUIRED_WARMUP_CYCLES{500U};
 };
 
 }  // namespace mivia_rover_platform
