@@ -164,6 +164,15 @@ private:
   //it will be used for made a passive waiting of the thread
   std::atomic<bool> dds_has_new_data_{false};
 
+  /* ---------- RT buffers ---------- */
+  realtime_tools::RealtimeBuffer<EncoderSample> encoder_buffer_;
+  /* ---------- RT command double-buffer (lock-free) ---------- */
+  std::array<CommandSample, 2U> cmd_buf_;
+  std::atomic<std::uint32_t> cmd_seq_;
+  std::atomic<bool> cmd_valid_;
+
+
+
   /* ---------- State/command storage exposed to ros2_control ---------- */
   std::vector<double> hw_commands_;    /* [rad/s] */
   std::vector<double> hw_positions_;   /* [rad] derived */
