@@ -41,6 +41,8 @@
 #include "mivia_rover_can_msgs/msg/encoder_rpms.hpp"
 #include "mivia_rover_can_msgs/msg/reference.hpp"
 
+#include "rt_control_loop_profiler.hpp"
+
 namespace mivia_rover_platform
 {
 
@@ -87,6 +89,7 @@ private:
   {
     std::array<double, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
+    std::uint64_t t_start_dds_ns;
     bool valid;
   };
 
@@ -94,6 +97,7 @@ private:
   {
     std::array<std::int32_t, kNumWheelJoints> rpm;
     std::uint64_t stamp_ns;
+    std::uint64_t t_start_steady_ns;
     bool valid;
   };
 
@@ -160,6 +164,12 @@ private:
   /* ---------- Fault handling ---------- */
   std::uint32_t consecutive_timeouts_;
   std::atomic<bool> fault_stop_;
+
+  RtControlLoopProfiler rt_logger_;
+  std::atomic<std::uint64_t> last_comm_cpu_ns_{0ULL};
+  bool sync_achieved_{false};
+  uint32_t warmup_cycles_{0U};
+  const uint32_t REQUIRED_WARMUP_CYCLES{500U};
 };
 
 }  // namespace mivia_rover_platform

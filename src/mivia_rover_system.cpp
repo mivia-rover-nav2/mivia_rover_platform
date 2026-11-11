@@ -317,6 +317,8 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_init(
     cmd_buf_[1] = c;
   }
 
+  rt_logger_.init(120000U, "/home/miviarover/Desktop/pre_write_ros2_control.csv");
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -392,6 +394,9 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_activate(
   consecutive_timeouts_ = 0U;
   fault_stop_.store(false);
 
+  sync_achieved_ = false;
+  warmup_cycles_ = 0U;
+
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -400,6 +405,7 @@ hardware_interface::CallbackReturn MiviaRoverSystem::on_deactivate(
 {
   /* Optionally request stop */
   fault_stop_.store(true);
+  rt_logger_.flush_to_disk();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -440,6 +446,9 @@ void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::Encode
 {
   EncoderSample s;
 
+  //recieve timestamp
+  s.t_start_dds_ns = RtControlLoopProfiler::now_monotonic_ns();
+
   /* Message field order: [front_left, rear_left, front_right, rear_right] */
   s.rpm[0] = msg->front_left;
   s.rpm[1] = msg->rear_left;
@@ -456,10 +465,15 @@ void MiviaRoverSystem::encoder_callback_(const mivia_rover_can_msgs::msg::Encode
 hardware_interface::return_type MiviaRoverSystem::read(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
+  //start logging
+  if (sync_achieved_) {
+    rt_logger_.begin_cycle();
+  }
   const EncoderSample * const enc = encoder_buffer_.readFromRT();
 
   if ((enc == nullptr) || (!enc->valid))
   {
+    warmup_cycles_ = 0U;
     return hardware_interface::return_type::OK;
   }
 
@@ -470,6 +484,7 @@ hardware_interface::return_type MiviaRoverSystem::read(
   if (age_sec > feedback_timeout_sec_)
   {
     consecutive_timeouts_++;
+    warmup_cycles_ = 0U;
 
     /* Fail-safe local state */
     for (std::size_t i = 0U; i < kNumWheelJoints; ++i)
@@ -513,6 +528,15 @@ hardware_interface::return_type MiviaRoverSystem::read(
     hw_positions_[joint_i] = hw_positions_[joint_i] + (w * dt);
   }
 
+  if (sync_achieved_) {
+    rt_logger_.end_read(enc->t_start_dds_ns, 1U);
+  } else {
+    warmup_cycles_++;
+    if (warmup_cycles_ >= REQUIRED_WARMUP_CYCLES) {
+      sync_achieved_ = true;
+    }
+  }
+
   return hardware_interface::return_type::OK;
 }
 
@@ -520,9 +544,16 @@ hardware_interface::return_type MiviaRoverSystem::write(
   const rclcpp::Time & time, const rclcpp::Duration & /*period*/)
 {
   /* If we are in fault-stop, command buffer can still be updated, but publisher will output zeros */
+
+  if (sync_achieved_) {
+    rt_logger_.begin_write();
+  }
+
   CommandSample cmd;
   cmd.valid = true;
   cmd.stamp_ns = static_cast<std::uint64_t>(time.nanoseconds());
+
+  cmd.t_start_steady_ns = sync_achieved_ ? RtControlLoopProfiler::now_monotonic_ns() : 0ULL;
 
   for (std::size_t k = 0U; k < kNumWheelJoints; ++k)
   {
@@ -540,6 +571,10 @@ hardware_interface::return_type MiviaRoverSystem::write(
     cmd_valid_.store(true, std::memory_order_release);
 
     cmd_seq_.store(seq + 1U, std::memory_order_release);
+  }
+
+  if (sync_achieved_) {
+    rt_logger_.end_write_and_record(last_comm_cpu_ns_.load(std::memory_order_relaxed));
   }
 
   return hardware_interface::return_type::OK;
@@ -573,6 +608,7 @@ void MiviaRoverSystem::comm_thread_entry_()
   }
 
   const std::chrono::duration<double> sleep_dur(1.0 / hz);
+  std::uint64_t prev_comm_cpu_ns = RtControlLoopProfiler::now_thread_cpu_ns();
 
   while (comm_running_.load())
   {
@@ -598,6 +634,9 @@ void MiviaRoverSystem::comm_thread_entry_()
         out.front_right = 0;
         out.rear_right = 0;
 
+        out.header.stamp.sec = 0;
+        out.header.stamp.nanosec = 0;
+
         reference_pub_->publish(out);
       }
       else
@@ -615,6 +654,9 @@ void MiviaRoverSystem::comm_thread_entry_()
           out.front_right = cmd.rpm[2];
           out.rear_right = cmd.rpm[3];
 
+          out.header.stamp.sec = static_cast<std::int32_t>(cmd.t_start_steady_ns / 1000000000ULL);
+          out.header.stamp.nanosec = static_cast<std::uint32_t>(cmd.t_start_steady_ns % 1000000000ULL);
+
           reference_pub_->publish(out);
         }
         else
@@ -625,10 +667,19 @@ void MiviaRoverSystem::comm_thread_entry_()
           out.front_right = 0;
           out.rear_right = 0;
 
+          out.header.stamp.sec = 0;
+          out.header.stamp.nanosec = 0;
+
           reference_pub_->publish(out);
         }
       }
     }
+
+    const std::uint64_t now_comm_cpu_ns = RtControlLoopProfiler::now_thread_cpu_ns();
+    if (now_comm_cpu_ns >= prev_comm_cpu_ns) {
+      last_comm_cpu_ns_.store(now_comm_cpu_ns - prev_comm_cpu_ns, std::memory_order_relaxed);
+    }
+    prev_comm_cpu_ns = now_comm_cpu_ns;
 
     std::this_thread::sleep_for(sleep_dur);
   }
