@@ -477,12 +477,14 @@ hardware_interface::return_type MiviaRoverSystem::read(
       hw_velocities_[i] = 0.0;
     }
 
+    /*
     if (consecutive_timeouts_ >= max_consecutive_timeouts_)
     {
-      /* Engage stop publishing */
+      % Engage stop publishing 
       fault_stop_.store(true);
       return hardware_interface::return_type::ERROR;
     }
+    */
 
     /* Degrade but keep running */
     fault_stop_.store(true);
